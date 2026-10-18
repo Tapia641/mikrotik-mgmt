@@ -6,9 +6,9 @@ vouchers, sesiones y reportes), inspirado en **Mikhmon v3**.
 - **Stack:** Next.js (App Router) · TypeScript · Tailwind CSS · SQLite
   (`better-sqlite3`) · wrapper propio de la API RouterOS
   (`@fibercom/routeros-api`).
-- **Estado:** Fase 1 — **persistencia real**. Migraciones versionadas + 4
-  repositorios con 75 tests en verde. RouterOS, servicios y UI siguen como
-  esqueletos con `TODO`.
+- **Estado:** **Completo (10/10 pasos)** — persistencia real, autenticación,
+  CRUD de routers, monitoreo en vivo, hotspot, vouchers, impresión QR, reportes
+  y hardening (rate-limit + auditoría). **353 tests en verde.**
 
 📐 El diseño completo está en **[ARCHITECTURE.md](./ARCHITECTURE.md)**.
 
@@ -59,6 +59,117 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"   # 
 | `npm run db:migrate` | Aplica migraciones pendientes (idempotente) |
 | `npm run db:seed` | Inserta datos de desarrollo (idempotente) |
 
+## Puertos
+
+| Servicio | Puerto | Protocolo | Notas |
+|---|---|---|---|
+| Panel web (Next.js) | **3000** | HTTP | `npm run dev` / `npm run start`. Configurable con `-p`. |
+| API RouterOS (MikroTik) | **8728** | TCP (sin TLS) | `/ip service enable api`. Usado por defecto (`protocol: api`). |
+| API RouterOS SSL (MikroTik) | **8729** | TCP + TLS | `/ip service enable api-ssl`. Usado con `protocol: api-ssl`. |
+| SQLite | archivo | — | `data/mikrotik-manager.sqlite`. Sin puerto (embebido). |
+
+El panel se conecta al router por el puerto configurado al darlo de alta
+(`router.port`, por defecto `8728`). Si el equipo no responde, la API devuelve
+**502/504** con `error.details.mikrotikCode` (`CONNECTION_REFUSED`,
+`CONNECTION_TIMEOUT`, `AUTH_FAILED`), nunca un 500 genérico.
+
+## Arquitectura (diagrama)
+
+```mermaid
+flowchart LR
+    subgraph Browser["Navegador (cliente)"]
+        UI["Next.js App Router<br/>/dashboard/* · /hotspot/*"]
+    end
+
+    subgraph Next["Panel web · Next.js (puerto 3000)"]
+        Proxy["src/proxy.ts<br/>guard optimista de sesión"]
+        Routes["Route Handlers<br/>src/app/api/**/route.ts"]
+        Services["Servicios (casos de uso)<br/>src/core/services/*"]
+        Repos["Repositorios<br/>src/database/repositories/*"]
+        DB[("SQLite<br/>data/mikrotik-manager.sqlite")]
+        Auth["Auth<br/>JWT (jose) + denylist en memoria"]
+        MT["Adaptador RouterOS<br/>src/core/mikrotik/*"]
+    end
+
+    subgraph Router["Router MikroTik"]
+        ROS["API RouterOS<br/>puerto 8728 (TCP) / 8729 (TLS)"]
+    end
+
+    UI -->|fetch JSON| Proxy
+    Proxy -->|sesión válida| Routes
+    Routes -->|requirePermission / requireSession| Auth
+    Routes --> Services
+    Services --> Repos
+    Repos --> DB
+    Services --> MT
+    MT -->|@fibercom/routeros-api<br/>TCP/TLS| ROS
+```
+
+### Flujo de una petición (ejemplo: generar un lote de vouchers)
+
+```mermaid
+sequenceDiagram
+    participant U as Usuario (navegador)
+    participant P as proxy.ts
+    participant R as Route Handler<br/>/api/hotspot/vouchers
+    participant S as voucherService
+    participant M as Adaptador MikroTik
+    participant D as RouterOS (8728)
+    participant DB as SQLite
+
+    U->>P: POST /api/hotspot/vouchers
+    P-->>R: sesión válida (cookie mt_session)
+    R->>R: zod valida body + requirePermission('vouchers:write')
+    R->>S: generateBatch(request, userId)
+    S->>M: find(routerId)
+    M->>D: /ip/hotspot/user/print (verifica router)
+    D-->>M: OK
+    S->>M: addUser × N (execute)
+    M->>D: /ip/hotspot/user/add
+    D-->>M: !done
+    S->>DB: createBatchWithVouchers (transacción)
+    DB-->>S: vouchers persistidos
+    S-->>R: VoucherBatchResult (creados + fallidos)
+    R-->>U: 201 + JSON (JWT solo en cookie httpOnly)
+```
+
+### Capas y responsabilidades
+
+| Capa | Ubicación | Responsabilidad |
+|---|---|---|
+| **UI** | `src/app/(dashboard\|hotspot)/*` | Server Components resuelven el primer listado; Client Components pintan y mutan vía `/api/*`. |
+| **Proxy** | `src/proxy.ts` | Comprobación optimista de firma de la cookie; redirige a `/login` sin sesión. |
+| **API** | `src/app/api/**/route.ts` | Validación zod del borde, autorización (`requirePermission`), traducción `Result`/`MikrotikError` → HTTP (`handleRoute`). |
+| **Servicios** | `src/core/services/*` | Casos de uso; devuelven `Result<T>` para lo esperado y **lanzan** `MikrotikError` para fallos de infraestructura. |
+| **Adaptador MikroTik** | `src/core/mikrotik/*` | `client.ts` (protocolo), `transport.ts` (socket), `pool.ts` (1 conexión por router), `commands/*` (builders puros), `parsers.ts` (anticorrupción). |
+| **Repositorios** | `src/database/repositories/*` | SQL con prepared statements; `BaseRepository` (CRUD, paginación, borrado lógico). |
+| **Base de datos** | `src/database/migrations/*` + `data/*.sqlite` | SQLite embebido, esquema versionado con checksums. |
+
+### App Router — rutas de la aplicación
+
+| Ruta | Tipo | Descripción |
+|---|---|---|
+| `/` | redirect | → `/dashboard` |
+| `/login` | página | Formulario de autenticación |
+| `/dashboard` | página | Panel principal |
+| `/dashboard/routers` | página | CRUD de routers + prueba de conexión |
+| `/dashboard/monitoring` | página | Monitoreo en vivo (CPU, memoria, tráfico) |
+| `/hotspot/users` | página | Usuarios hotspot (alta, baja, filtros) |
+| `/hotspot/profiles` | página | Perfiles de velocidad/tiempo |
+| `/hotspot/active` | página | Sesiones activas + desconexión |
+| `/hotspot/vouchers` | página | Generación por lote, venta, revocación |
+| `/hotspot/vouchers/print` | API | `buildPrintJob` (QR/card/thermal/a4-grid) |
+
+### API REST — endpoints por dominio
+
+| Dominio | Rutas principales |
+|---|---|
+| **Auth** | `POST /api/auth/login` · `POST /api/auth/logout` · `GET /api/auth/me` |
+| **Routers** | `GET/POST /api/routers` · `GET/PATCH/DELETE /api/routers/[id]` · `POST …/test` · `GET …/snapshot` · `GET …/interfaces` |
+| **Hotspot** | `GET/POST /api/hotspot/users` · `DELETE /api/hotspot/users/[id]` · `GET/POST /api/hotspot/profiles` · `DELETE …/[id]` · `GET /api/hotspot/active` · `DELETE …/[id]` · `GET /api/hotspot/hosts` |
+| **Vouchers** | `GET/POST /api/hotspot/vouchers` · `POST …/[id]/sell` · `POST …/[id]/revoke` · `GET /api/hotspot/vouchers/print` |
+| **Sistema** | `GET /api/health` |
+
 ## Autenticación
 
 - Login en `/login`; el formulario llama a `POST /api/auth/login`, que deposita
@@ -83,17 +194,6 @@ Credenciales del seed: `owner` / `admin12345` (cámbialas en producción).
 La contraseña de cada router se guarda **cifrada** (AES-256-GCM) y nunca vuelve
 al navegador.
 
-| Método | Ruta | Descripción |
-|---|---|---|
-| `GET` | `/api/routers` | Listado paginado (`search`, `status`, `sortBy`) |
-| `POST` | `/api/routers` | Alta (nombre único, `password` obligatoria) |
-| `GET` | `/api/routers/[id]` | Detalle |
-| `PATCH` | `/api/routers/[id]` | Edición parcial (`password` vacía se ignora) |
-| `DELETE` | `/api/routers/[id]` | Baja lógica |
-| `POST` | `/api/routers/[id]/test` | Prueba de conexión; guarda `status`/`lastError` |
-| `GET` | `/api/routers/[id]/snapshot` | Identidad, recursos y salud |
-| `GET` | `/api/routers/[id]/interfaces` | Tasas de tráfico por interfaz |
-
 - Todas exigen `routers:read` (lecturas) o `routers:write` (mutaciones).
 - Si el equipo no responde, la respuesta es **502/504** con
   `error.details.mikrotikCode` (p. ej. `CONNECTION_REFUSED`, `CONNECTION_TIMEOUT`,
@@ -106,10 +206,10 @@ al navegador.
 
 ```
 src/
-├─ app/         # UI (App Router) + API routes — mapa en ARCHITECTURE.md §2
+├─ app/         # UI (App Router) + API routes — mapa arriba
 ├─ core/        # mikrotik/ (adaptador RouterOS) + services/ (casos de uso)
 ├─ database/    # db.ts, migrate.ts, migrations/, seed.ts, repositories/
-├─ lib/         # env.ts, crypto.ts, utils.ts (capa hoja)
+├─ lib/         # env.ts, crypto.ts, utils.ts, rate-limit.ts, voucher-code.ts (capa hoja)
 └─ types/       # index.ts — contratos globales
 scripts/        # CLI (db-migrate.ts, db-seed.ts)
 ```
@@ -120,6 +220,8 @@ scripts/        # CLI (db-migrate.ts, db-seed.ts)
   aplicada es **inmutable** (el runner verifica su checksum).
 - El archivo vive en `data/mikrotik-manager.sqlite` (ignorado por git) y se crea
   al ejecutar `npm run db:migrate`.
+- Tablas principales: `users`, `routers`, `reseller_profiles`, `voucher_batches`,
+  `vouchers`, `transactions`, `audit_log`.
 
 ## Verificar
 
