@@ -1,0 +1,2 @@
+# Este directorio guarda la base de datos SQLite (ignorada por git).
+# El archivo se crea automaticamente en el primer acceso a `getDb()`.

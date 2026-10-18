@@ -1,0 +1,54 @@
+@import 'tailwindcss';
+
+/* ─────────────────────────────────────────────────────────────
+ * Tokens de diseño (Tailwind v4: se declaran en CSS con `@theme`).
+ * Cada variable `--color-*` genera utilidades (`bg-brand-600`, ...).
+ * ───────────────────────────────────────────────────────────── */
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+    sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'Segoe UI Mono', Menlo, Consolas, monospace;
+
+  /* Marca (inspirada en la paleta azul de los paneles MikroTik) */
+  --color-brand-50: #eef6ff;
+  --color-brand-100: #d9ebff;
+  --color-brand-200: #bcdcff;
+  --color-brand-300: #8ec6ff;
+  --color-brand-400: #59a6ff;
+  --color-brand-500: #2f85f7;
+  --color-brand-600: #1a66e0;
+  --color-brand-700: #1652b4;
+  --color-brand-800: #17458f;
+  --color-brand-900: #173c72;
+  --color-brand-950: #102548;
+
+  /* Superficies */
+  --color-surface: #f6f8fb;
+  --color-surface-elevated: #ffffff;
+  --color-surface-muted: #eef2f7;
+  --color-border-subtle: #e2e8f0;
+
+  /* Estados */
+  --color-success: #16a34a;
+  --color-warning: #d97706;
+  --color-danger: #dc2626;
+  --color-info: #0284c7;
+}
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    background-color: var(--color-surface);
+    color: #0f172a;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  :root {
+    color-scheme: light;
+  }
+}
