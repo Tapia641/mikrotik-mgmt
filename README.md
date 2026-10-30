@@ -73,38 +73,6 @@ El panel se conecta al router por el puerto configurado al darlo de alta
 **502/504** con `error.details.mikrotikCode` (`CONNECTION_REFUSED`,
 `CONNECTION_TIMEOUT`, `AUTH_FAILED`), nunca un 500 genérico.
 
-## Arquitectura (diagrama)
-
-```mermaid
-flowchart LR
-    subgraph Browser["Navegador (cliente)"]
-        UI["Next.js App Router<br/>/dashboard/* · /hotspot/*"]
-    end
-
-    subgraph Next["Panel web · Next.js (puerto 3000)"]
-        Proxy["src/proxy.ts<br/>guard optimista de sesión"]
-        Routes["Route Handlers<br/>src/app/api/**/route.ts"]
-        Services["Servicios (casos de uso)<br/>src/core/services/*"]
-        Repos["Repositorios<br/>src/database/repositories/*"]
-        DB[("SQLite<br/>data/mikrotik-manager.sqlite")]
-        Auth["Auth<br/>JWT (jose) + denylist en memoria"]
-        MT["Adaptador RouterOS<br/>src/core/mikrotik/*"]
-    end
-
-    subgraph Router["Router MikroTik"]
-        ROS["API RouterOS<br/>puerto 8728 (TCP) / 8729 (TLS)"]
-    end
-
-    UI -->|fetch JSON| Proxy
-    Proxy -->|sesión válida| Routes
-    Routes -->|requirePermission / requireSession| Auth
-    Routes --> Services
-    Services --> Repos
-    Repos --> DB
-    Services --> MT
-    MT -->|@fibercom/routeros-api<br/>TCP/TLS| ROS
-```
-
 ### Flujo de una petición (ejemplo: generar un lote de vouchers)
 
 ```mermaid
